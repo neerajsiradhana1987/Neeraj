@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=NSE Paper Agent
+GenericName=Paper Trading Dashboard
+Comment=LLM-driven paper trading agent for NSE equities
+Exec=bash -lc 'cd "$(dirname "%k")" && ./start-website.sh'
+Path=%k
+Terminal=true
+Icon=applications-internet
+Categories=Office;Finance;Network;
+Keywords=trading;nse;stocks;paper;agent;

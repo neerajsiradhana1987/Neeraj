@@ -18,6 +18,8 @@ No real money, no real orders, no broker account required. This is an educationa
 
 ## Quickstart
 
+**Just want to see it work?** Double-click `start-website.sh` — full website, no setup.
+
 ```bash
 # 1. optional but recommended: fresh config + .env.example
 python3 -m trading_agent init
@@ -135,12 +137,36 @@ trading_agent/
   storage.py      state.json + journal.jsonl persistence
   report.py       status and trade rendering
   webui.py        stdlib HTTP server, JSON API and mobile dashboard
-tests/            54 unit and end-to-end tests
+tests/            57 unit and end-to-end tests
+start-website.sh  double-click launcher (Linux/macOS) + stop-website.sh
+start-website.bat double-click launcher (Windows)
 ```
+
+## One click (easiest)
+
+Double-click **`start-website.sh`** (or **`start-website.bat`** on Windows, or the
+**NSE Paper Agent** desktop entry). It will:
+
+1. start the web server on port `8000`, reachable from your phone on the same Wi-Fi,
+2. open your browser automatically,
+3. generate an access token and give you a link that logs itself in,
+4. **start trading immediately** (one cycle per minute).
+
+Then open the printed phone link on your mobile and tap *Add to Home Screen*.
+Stop it with **`stop-website.sh`** (or `Ctrl+C` in the launcher window).
+
+<details>
+<summary>Manual (terminal) alternative</summary>
+
+```bash
+python3 -m trading_agent web --host 0.0.0.0 --port 8000 --auto-token --open --autostart --poll 60
+```
+
+</details>
 
 ## Web dashboard (use it from your phone)
 
-A mobile-first dashboard is included — standard library only, no extra installs:
+The same dashboard, started manually — standard library only, no extra installs:
 
 ```bash
 python3 -m trading_agent web --host 0.0.0.0 --port 8000 --token pick-a-secret
@@ -171,7 +197,7 @@ phone can start/stop/pause the agent but can never bypass a risk limit.
 python3 -m unittest discover -s tests -v
 ```
 
-Everything runs offline (synthetic provider + mocked HTTP), so the suite is safe in CI.
+57 tests. Everything runs offline (synthetic provider + mocked HTTP), so the suite is safe in CI.
 
 ## Running it for real (still paper)
 

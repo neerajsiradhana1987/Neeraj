@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import socket
+import sys
 import threading
 import time
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -386,6 +389,14 @@ justify-content:center;padding:24px;z-index:20}
 
 <script>
 const TOKEN_KEY = "nse_agent_token";
+(function adoptTokenFromUrl() {
+  // one-click links carry ?token=... - keep it so later visits need nothing
+  const param = new URLSearchParams(location.search).get("token");
+  if (param) {
+    localStorage.setItem(TOKEN_KEY, param);
+    history.replaceState(null, "", location.pathname);
+  }
+})();
 let TOKEN = localStorage.getItem(TOKEN_KEY) || "";
 const fmt = (n, d = 2) => (n === null || n === undefined || isNaN(n)) ? "n/a"
   : Number(n).toLocaleString("en-IN", {minimumFractionDigits: d, maximumFractionDigits: d});
@@ -708,22 +719,73 @@ def build_controller(config_path: str = "config.json", poll_seconds: int = None,
     return WebController(config, agent, config_path=config_path, poll_seconds=poll_seconds)
 
 
+def resolve_token(state_dir: str, token: str = None, auto_token: bool = False):
+    """Resolve the dashboard token.
+
+    An explicit ``token`` always wins. With ``auto_token`` a random token is
+    generated once and remembered in ``<state_dir>/.web_token`` (gitignored),
+    so one-click launchers can hand out a link that logs itself in.
+    """
+    if token:
+        return token
+    if not auto_token:
+        return None
+    path = Path(state_dir) / ".web_token"
+    try:
+        saved = path.read_text(encoding="utf-8").strip()
+        if saved:
+            return saved
+    except OSError:
+        pass
+    generated = secrets.token_urlsafe(9)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(generated, encoding="utf-8")
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return generated
+
+
 def serve(host: str = "127.0.0.1", port: int = 8000, config_path: str = "config.json",
-          token: str = None, poll_seconds: int = None, force_mock: bool = False) -> None:
+          token: str = None, poll_seconds: int = None, force_mock: bool = False,
+          auto_token: bool = False, open_browser: bool = False, autostart: bool = False) -> None:
+    """Start the dashboard (optionally one-click: token, browser and auto loop)."""
     controller = build_controller(config_path, poll_seconds, force_mock)
+    token = resolve_token(controller.config.state_dir, token, auto_token)
     handler = make_handler(controller, token)
     server = ThreadingHTTPServer((host, port), handler)
     server.daemon_threads = True
     bound_host, bound_port = server.server_address[:2]
-    print(f"NSE paper agent dashboard listening on http://{bound_host}:{bound_port}")
+    base = f"http://{bound_host}:{bound_port}"
+    print(f"NSE paper agent dashboard listening on {base}")
     if host in ("0.0.0.0", "::", ""):
         print(f"  on your phone (same Wi-Fi): http://{_lan_ip()}:{bound_port}")
     print(f"  model: {'mock (no key)' if controller.agent.using_mock else controller.config.llm.model}")
     if token:
-        print("  token required: append ?token=... to the URL or send Authorization: Bearer ...")
+        print(f"  open this link (it remembers the token): {base}/?token={token}")
+        if host in ("0.0.0.0", "::", ""):
+            print(f"  phone link: http://{_lan_ip()}:{bound_port}/?token={token}")
     else:
-        print("  no token set (local access only); use --token to expose it on a network")
+        print("  no token set (local access only); use --token to require one")
+    if autostart:
+        controller.start_loop()
+        print(f"  auto loop started: one cycle every {controller.poll_seconds}s "
+              "(pause/resume from the dashboard)")
     print("Ctrl+C to stop")
+    sys.stdout.flush()
+
+    if open_browser:
+        def _open():
+            time.sleep(0.8)
+            try:
+                webbrowser.open(base + (f"/?token={token}" if token else ""))
+                print("  browser opened", flush=True)
+            except Exception:
+                print("  could not open a browser automatically; use the link above", flush=True)
+
+        threading.Thread(target=_open, daemon=True).start()
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

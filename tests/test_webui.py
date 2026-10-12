@@ -7,12 +7,13 @@ import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 from trading_agent.agent import TradingAgent
 from trading_agent.config import AgentConfig, BrokerConfig, MarketConfig, RiskConfig
 from trading_agent.data import SyntheticProvider
 from trading_agent.llm import MockLLMClient
-from trading_agent.webui import WebController, make_handler
+from trading_agent.webui import WebController, make_handler, resolve_token
 
 
 def _request(url, method="GET", payload=None, headers=None):
@@ -139,8 +140,8 @@ class WebDashboardTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
 
     def test_close_position_route(self):
-        agent = self._agent = TradingAgent(self.config, provider=SyntheticProvider(seed=21, bars=120),
-                                           llm=MockLLMClient())
+        agent = TradingAgent(self.config, provider=SyntheticProvider(seed=21, bars=120),
+                             llm=MockLLMClient())
         agent.store.save_state({
             "broker": {
                 "cash": 400000.0,
@@ -154,11 +155,9 @@ class WebDashboardTests(unittest.TestCase):
             },
             "last_prices": {"RELIANCE.NS": 1010.0},
             "current_day": None, "day_start_equity": None, "halted": False,
-            "last_prices_by": {}, "cooldowns": {}, "cycles": 0,
+            "cooldowns": {}, "cycles": 0,
         })
-        from trading_agent.webui import WebController as _Controller
-
-        controller = _Controller(self.config, agent, config_path=self.config_path)
+        controller = WebController(self.config, agent, config_path=self.config_path)
         server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(controller, None))
         server.daemon_threads = True
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -198,13 +197,35 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual(status, 401)
 
     def test_reset_endpoint(self):
-        controller, url = self._start()
+        _, url = self._start()
         _request(f"{url}/api/cycle", method="POST", payload={"force": True})
         status, payload = _request(f"{url}/api/reset", method="POST", payload={})
         self.assertTrue(payload["ok"])
         status, payload = _request(f"{url}/api/status")
         self.assertEqual(payload["equity"], 500000.0)
         self.assertEqual(payload["cycles"], 0)
+
+
+class TokenHelperTests(unittest.TestCase):
+    def test_explicit_token_wins_and_is_not_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resolve_token(tmp, token="mine", auto_token=True)
+            self.assertFalse((Path(tmp) / ".web_token").exists())
+            self.assertEqual(resolve_token(tmp, token="mine", auto_token=True), "mine")
+
+    def test_auto_token_is_created_and_reused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(resolve_token(tmp))
+            first = resolve_token(tmp, auto_token=True)
+            self.assertTrue(first)
+            self.assertGreaterEqual(len(first), 8)
+            self.assertTrue((Path(tmp) / ".web_token").exists())
+            self.assertEqual(resolve_token(tmp, auto_token=True), first)
+
+    def test_auto_token_reads_existing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".web_token").write_text("saved-token\n", encoding="utf-8")
+            self.assertEqual(resolve_token(tmp, auto_token=True), "saved-token")
 
 
 class HaltBehaviourTests(unittest.TestCase):
@@ -246,8 +267,7 @@ class HaltBehaviourTests(unittest.TestCase):
             self.assertEqual(report.fills[0].reason, "STOP_LOSS")
             self.assertFalse(any(fill.side == "BUY" for fill in report.fills),
                              "no new entries while halted")
-            status = agent.status()
-            self.assertEqual(status["positions"], [])
+            self.assertEqual(agent.status()["positions"], [])
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ python3 -m trading_agent doctor              # environment check
 python3 -m trading_agent demo --cycles 10    # offline demo (synthetic data + mock LLM)
 python3 -m trading_agent run --once --force  # single cycle against live Yahoo data
 python3 -m trading_agent web --host 0.0.0.0 --port 8000 --token secret   # mobile dashboard
+./start-website.sh                        # one-click: token + browser + auto loop
 ```
 
 Run the test suite after any code change; do not commit if it is red.

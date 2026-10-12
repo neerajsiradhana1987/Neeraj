@@ -172,9 +172,9 @@ def cmd_web(args) -> int:
     from .webui import serve
 
     token = args.token or os.environ.get("TRADING_WEB_TOKEN") or None
-    if args.host not in ("127.0.0.1", "localhost", "::1") and not token:
+    if args.host not in ("127.0.0.1", "localhost", "::1") and not token and not args.auto_token:
         print("warning: binding to a non-local host without a token; anyone on the network "
-              "can control this paper portfolio (set --token to require one)", file=sys.stderr)
+              "can control this paper portfolio (use --auto-token or --token)", file=sys.stderr)
     serve(
         host=args.host,
         port=args.port,
@@ -182,6 +182,9 @@ def cmd_web(args) -> int:
         token=token,
         poll_seconds=args.poll,
         force_mock=args.mock_llm,
+        auto_token=args.auto_token,
+        open_browser=args.open,
+        autostart=args.autostart,
     )
     return 0
 
@@ -250,6 +253,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="require this bearer token on every API call (or set TRADING_WEB_TOKEN)")
     p_web.add_argument("--poll", type=int, default=None, help="default loop interval in seconds")
     p_web.add_argument("--mock-llm", action="store_true", help="use the deterministic mock strategy")
+    p_web.add_argument("--auto-token", action="store_true",
+                       help="generate and remember a dashboard token (state/.web_token)")
+    p_web.add_argument("--open", action="store_true", help="open the dashboard in your browser")
+    p_web.add_argument("--autostart", action="store_true",
+                       help="start the trading loop as soon as the dashboard starts")
     p_web.set_defaults(func=cmd_web)
 
     return parser
