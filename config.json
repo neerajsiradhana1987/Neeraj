@@ -1,0 +1,46 @@
+{
+  "state_dir": "state",
+  "poll_seconds": 300,
+  "llm": {
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini",
+    "temperature": 0.2,
+    "max_tokens": 500,
+    "timeout_seconds": 45
+  },
+  "risk": {
+    "max_position_pct": 0.15,
+    "max_positions": 5,
+    "risk_per_trade_pct": 0.01,
+    "max_daily_loss_pct": 0.03,
+    "min_cash_pct": 0.1,
+    "max_order_value": 200000,
+    "cooldown_minutes": 60,
+    "atr_stop_multiplier": 2.0,
+    "reward_risk_ratio": 2.0
+  },
+  "broker": {
+    "starting_cash": 500000,
+    "slippage_bps": 5,
+    "allow_short": false
+  },
+  "market": {
+    "symbols": [
+      "RELIANCE.NS",
+      "TCS.NS",
+      "HDFCBANK.NS",
+      "INFY.NS",
+      "ICICIBANK.NS"
+    ],
+    "interval": "5m",
+    "bars": 200,
+    "session_only": true,
+    "holidays": [],
+    "staleness_multiplier": 4.0
+  },
+  "data": {
+    "source": "yahoo",
+    "csv_directory": "data",
+    "seed": 1234
+  }
+}
