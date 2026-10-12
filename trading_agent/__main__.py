@@ -168,6 +168,24 @@ def cmd_doctor(args) -> int:
     return 1 if failed else 0
 
 
+def cmd_web(args) -> int:
+    from .webui import serve
+
+    token = args.token or os.environ.get("TRADING_WEB_TOKEN") or None
+    if args.host not in ("127.0.0.1", "localhost", "::1") and not token:
+        print("warning: binding to a non-local host without a token; anyone on the network "
+              "can control this paper portfolio (set --token to require one)", file=sys.stderr)
+    serve(
+        host=args.host,
+        port=args.port,
+        config_path=args.config,
+        token=token,
+        poll_seconds=args.poll,
+        force_mock=args.mock_llm,
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="trading-agent",
@@ -222,6 +240,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor = sub.add_parser("doctor", help="check config, data and LLM connectivity")
     p_doctor.add_argument("--config", default="config.json")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_web = sub.add_parser("web", help="start the mobile web dashboard")
+    add_common(p_web)
+    p_web.add_argument("--host", default="127.0.0.1",
+                       help="bind address; use 0.0.0.0 to reach it from your phone")
+    p_web.add_argument("--port", type=int, default=8000)
+    p_web.add_argument("--token", default=None,
+                       help="require this bearer token on every API call (or set TRADING_WEB_TOKEN)")
+    p_web.add_argument("--poll", type=int, default=None, help="default loop interval in seconds")
+    p_web.add_argument("--mock-llm", action="store_true", help="use the deterministic mock strategy")
+    p_web.set_defaults(func=cmd_web)
 
     return parser
 

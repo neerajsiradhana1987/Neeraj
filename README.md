@@ -56,6 +56,7 @@ python3 -m trading_agent run --once --force     # --force trades outside the ses
 | `run --interval 5m` | `1m`, `5m`, `15m`, `1h`, `1d` |
 | `run --mock-llm` | force the deterministic fallback strategy |
 | `demo` | offline demo on synthetic data (no key, no network) |
+| `web` | mobile web dashboard (`--host 0.0.0.0 --port 8000 --token ...`) |
 | `status` | cash, equity, positions, P&L, charges, halt status (`--json` for machines) |
 | `trades [--limit N]` | recent fills from the journal |
 | `reset --yes` | delete the local paper portfolio |
@@ -133,8 +134,36 @@ trading_agent/
   market_hours.py NSE session + data freshness (IST)
   storage.py      state.json + journal.jsonl persistence
   report.py       status and trade rendering
-tests/            45 unit and end-to-end tests
+  webui.py        stdlib HTTP server, JSON API and mobile dashboard
+tests/            54 unit and end-to-end tests
 ```
+
+## Web dashboard (use it from your phone)
+
+A mobile-first dashboard is included — standard library only, no extra installs:
+
+```bash
+python3 -m trading_agent web --host 0.0.0.0 --port 8000 --token pick-a-secret
+```
+
+Open `http://<your-computer-ip>:8000` on your phone (same Wi-Fi). On iOS/Android use
+**Add to Home Screen** — it launches full-screen with a dark theme and refreshes itself.
+
+What you get on the phone:
+
+- **Live cards**: equity, cash, day P&L (₹ and %), realized/unrealized P&L, charges, positions, cycles.
+- **Positions**: qty, average, last, value, P&L, stop/target levels, and a **Close** button for a manual exit.
+- **Controls**: *Run cycle* (with a *force* toggle for outside session hours), *Start/Stop loop* (runs a cycle every N seconds in the background), *Pause entries* (stops new buys but still enforces stop-losses), *Reset*.
+- **Watchlist**: add/remove symbols (e.g. `SBIN` → `SBIN.NS`) and switch the candle interval (`1m`–`1d`) — both are written back to `config.json`.
+- **Activity feed**: decisions, fills, risk rejections, skips and halts in real time.
+
+**Security**: with no token the server refuses non-local binds (`--host 0.0.0.0` warns loudly and
+exposes your paper portfolio to the network). Always pass `--token` (or set `TRADING_WEB_TOKEN`) when
+binding to anything other than localhost — every API call then needs `Authorization: Bearer <token>`,
+and the page stores it in `localStorage` after a one-time unlock.
+
+All web actions go through the same `RiskManager` and `StateStore.journal` path as the CLI, so the
+phone can start/stop/pause the agent but can never bypass a risk limit.
 
 ## Tests
 
@@ -149,6 +178,9 @@ Everything runs offline (synthetic provider + mocked HTTP), so the suite is safe
 ```bash
 # long-lived loop, log to file, running after you log out
 nohup python3 -m trading_agent run --poll 300 > agent.log 2>&1 &
+
+# or keep the dashboard up and drive the loop from your phone
+nohup python3 -m trading_agent web --host 0.0.0.0 --port 8000 --token secret > web.log 2>&1 &
 ```
 
 Watch it with `python3 -m trading_agent status`, audit decisions with `tail -f state/journal.jsonl`, and stop with `python3 -m trading_agent reset --yes` when you want a clean slate.

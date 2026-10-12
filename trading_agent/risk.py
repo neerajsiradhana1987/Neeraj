@@ -84,10 +84,13 @@ class RiskManager:
         open_positions: int,
         stop_loss: float = None,
         halted: bool = False,
+        entries_paused: bool = False,
         cooldown_active: bool = False,
     ) -> RiskVerdict:
         if halted:
             return RiskVerdict(False, 0, "trading halted for the day (daily loss limit)")
+        if entries_paused:
+            return RiskVerdict(False, 0, "new entries paused from the web UI")
         if cooldown_active:
             return RiskVerdict(False, 0, f"{symbol} in cooldown after stop-out")
         if price <= 0:

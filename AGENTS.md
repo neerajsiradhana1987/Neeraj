@@ -15,6 +15,7 @@ python3 -m unittest discover -s tests -v     # full test suite (offline)
 python3 -m trading_agent doctor              # environment check
 python3 -m trading_agent demo --cycles 10    # offline demo (synthetic data + mock LLM)
 python3 -m trading_agent run --once --force  # single cycle against live Yahoo data
+python3 -m trading_agent web --host 0.0.0.0 --port 8000 --token secret   # mobile dashboard
 ```
 
 Run the test suite after any code change; do not commit if it is red.
@@ -30,7 +31,7 @@ docstrings, type hints on public functions, 4-space indent, ~100 col lines).
   bypass it. New order paths must go through `RiskManager`.
 - Every action must be journaled to `state/journal.jsonl` via `StateStore.journal`
   (event types: `DAY_START`, `SKIP`, `DECISION`, `RISK_REJECT`, `FILL`, `HALT`,
-  `MARKET_CLOSED`, `CYCLE`).
+  `MARKET_CLOSED`, `CYCLE`, `WEB_ACTION`).
 - Secrets live in `.env` / environment variables only, never in `config.json`.
 - Tests must run offline: use `SyntheticProvider` and mock `urllib.request.urlopen`.
 - The `state/` directory is gitignored runtime data — do not commit it.

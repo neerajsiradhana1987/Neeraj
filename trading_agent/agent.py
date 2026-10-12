@@ -158,14 +158,13 @@ class TradingAgent:
             state["halted"] = True
             self.store.journal("HALT", reason=reason, equity=round(equity, 2))
 
-        if state.get("halted"):
-            report.halted = True
-            report.notes.append("halted: daily loss limit reached")
-            state["broker"] = broker.to_dict()
-            state["last_prices"] = last_prices
-            state["cooldowns"] = self.risk.cooldowns
-            self.store.save_state(state)
-            return report
+        halted = bool(state.get("halted"))
+        entries_paused = halted or bool(state.get("entries_paused"))
+        if entries_paused:
+            report.halted = halted
+            report.notes.append(
+                "halted: daily loss limit reached" if halted else "entries paused"
+            )
 
         market_open = is_market_open(now, self.holidays)
         report.market_open = market_open
@@ -265,7 +264,7 @@ class TradingAgent:
                 verdict = self.risk.approve_buy(
                     symbol, decision.quantity, price, equity, broker.cash,
                     open_positions=len(broker.positions), stop_loss=decision.stop_loss,
-                    halted=state.get("halted", False),
+                    halted=entries_paused,
                     cooldown_active=self.risk.in_cooldown(symbol, int(now.timestamp())),
                 )
                 if verdict.allowed and verdict.quantity > 0:
