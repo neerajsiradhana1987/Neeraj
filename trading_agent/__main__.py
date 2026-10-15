@@ -8,12 +8,13 @@ import sys
 import time
 from datetime import datetime
 
-from . import __version__
-from .agent import TradingAgent
+from . import __version__, indices
+from .agent import TradingAgent, build_provider
 from .config import load_config, write_default_config, write_dotenv_example
 from .data import YahooProvider
 from .market_hours import now_ist
-from .report import render_status, render_trades
+from .options import build_chain_provider
+from .report import render_index_board, render_status, render_trades
 
 BANNER = f"nse-paper-agent {__version__}"
 
@@ -119,6 +120,55 @@ def cmd_reset(args) -> int:
     return 0
 
 
+def cmd_indices(args) -> int:
+    """Trend, range, reversal warnings and option-chain read of the indices."""
+    config = load_config(args.config)
+    names = args.names or ",".join(config.indices.names)
+    specs = indices.resolve_indices(names)
+    interval = args.interval or config.indices.interval
+    bars = args.bars or config.indices.bars
+    source = args.source or config.indices.data_source or config.data.source
+    config.data.source = source
+    bar_provider = build_provider(config)
+
+    option_source = args.option_source or config.indices.option_source
+    chain_provider = None
+    if option_source not in ("off", "none", "disabled"):
+        if option_source == "synthetic":
+            chain_provider = indices.synthetic_chain_provider(bar_provider, interval, bars)
+        else:
+            chain_provider = build_chain_provider("nse")
+
+    if not args.json:
+        print(f"{BANNER} indices | {', '.join(spec.key for spec in specs)} | "
+              f"{interval} bars ({bars}) | bars {source} | chain {option_source}")
+    expiry = args.expiry or None
+    try:
+        while True:
+            board = indices.build_index_board(
+                specs=specs,
+                provider=bar_provider,
+                chain_provider=chain_provider,
+                interval=interval,
+                bars=bars,
+                expiry=expiry,
+                ladder_strikes=args.ladder,
+            )
+            if args.json:
+                _print_json(board)
+            else:
+                if sys.stdout.isatty():
+                    os.system("clear")
+                print(render_index_board(board))
+            if not args.watch:
+                break
+            time.sleep(args.watch)
+    except KeyboardInterrupt:
+        print("\nstopped", file=sys.stderr)
+        return 130
+    return 0
+
+
 def cmd_doctor(args) -> int:
     checks = []
     try:
@@ -136,6 +186,17 @@ def cmd_doctor(args) -> int:
         checks.append((f"yahoo data ({symbol})", ok, f"{len(bars)} bars" if ok else "empty"))
     except Exception as exc:
         checks.append((f"yahoo data ({symbol})", False, str(exc)))
+
+    if config.indices.option_source in ("off", "none", "disabled"):
+        checks.append(("option chain", False, "disabled in config (indices.option_source)"))
+    else:
+        chain_provider = build_chain_provider(config.indices.option_source)
+        try:
+            chain = chain_provider.fetch("NIFTY")
+            checks.append(("option chain (NIFTY)", bool(chain.legs),
+                           f"{chain.expiry}, {len(chain.legs)} legs, spot {chain.spot:,.2f}"))
+        except Exception as exc:
+            checks.append(("option chain (NIFTY)", False, str(exc)))
 
     if config.llm.enabled and config.llm.api_key:
         checks.append(("llm api key", True, f"{config.llm.model} via {config.llm.base_url}"))
@@ -243,6 +304,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor = sub.add_parser("doctor", help="check config, data and LLM connectivity")
     p_doctor.add_argument("--config", default="config.json")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_indices = sub.add_parser(
+        "indices",
+        help="intraday trend, range, reversal warnings and option chain for "
+             "NIFTY / BANKNIFTY / SENSEX",
+    )
+    p_indices.add_argument("--config", default="config.json")
+    p_indices.add_argument("--json", action="store_true", help="machine-readable output")
+    p_indices.add_argument("--names", default=None,
+                           help="index list, default NIFTY BANKNIFTY SENSEX")
+    p_indices.add_argument("--interval", default=None, choices=["1m", "5m", "15m", "1h", "1d"])
+    p_indices.add_argument("--bars", type=int, default=None, help="intraday bars to analyse")
+    p_indices.add_argument("--source", default=None,
+                           choices=["yahoo", "csv", "synthetic"],
+                           help="bar provider for the indices (default: config data.source)")
+    p_indices.add_argument("--option-source", default=None, dest="option_source",
+                           choices=["nse", "synthetic", "off"],
+                           help="option-chain provider (default: indices.option_source)")
+    p_indices.add_argument("--expiry", default=None,
+                           help="option expiry to analyse, e.g. 27-Oct-2025 (default: nearest)")
+    p_indices.add_argument("--watch", type=int, default=None, metavar="SECONDS",
+                           help="refresh every SECONDS until Ctrl+C")
+    p_indices.add_argument("--ladder", type=int, default=0, metavar="N",
+                           help="also print N strikes of the option ladder around ATM "
+                                "(JSON output only, default 0 = off)")
+    p_indices.set_defaults(func=cmd_indices)
 
     p_web = sub.add_parser("web", help="start the mobile web dashboard")
     add_common(p_web)

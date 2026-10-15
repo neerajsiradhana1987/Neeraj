@@ -50,7 +50,7 @@ python3 -m trading_agent run --once --force     # --force trades outside the ses
 | Command | Purpose |
 | --- | --- |
 | `init` | write `config.json` and `.env.example` |
-| `doctor` | check config, Yahoo connectivity, LLM key, state dir, market session |
+| `doctor` | check config, Yahoo connectivity, LLM key, NSE option chain, state dir, market session |
 | `run --once` | single cycle (fetch data, decide, maybe trade) |
 | `run --poll N` | loop forever, one cycle every N seconds |
 | `run --force` | trade even outside market hours / with stale-ish data |
@@ -59,6 +59,7 @@ python3 -m trading_agent run --once --force     # --force trades outside the ses
 | `run --mock-llm` | force the deterministic fallback strategy |
 | `demo` | offline demo on synthetic data (no key, no network) |
 | `web` | mobile web dashboard (`--host 0.0.0.0 --port 8000 --token ...`) |
+| `indices` | intraday trend / range / reversal warnings / option chain for NIFTY, BANKNIFTY, SENSEX |
 | `status` | cash, equity, positions, P&L, charges, halt status (`--json` for machines) |
 | `trades [--limit N]` | recent fills from the journal |
 | `reset --yes` | delete the local paper portfolio |
@@ -107,24 +108,69 @@ The broker also:
 
 ## Configuration
 
-`config.json` sections: `llm`, `risk`, `broker`, `market`, `data`, plus top-level `state_dir` and `poll_seconds`. Secrets come from the environment, never from the file:
+`config.json` sections: `llm`, `risk`, `broker`, `market`, `data`, `indices`, plus top-level `state_dir` and `poll_seconds`. Secrets come from the environment, never from the file:
 
 ```bash
 TRADING_LLM_API_KEY=...          # required for LLM mode
 TRADING_LLM_BASE_URL=https://openrouter.ai/api/v1
 TRADING_LLM_MODEL=openai/gpt-4o-mini
 TRADING_LLM_ENABLED=true
+TRADING_INDICES_OPTION_SOURCE=nse      # nse | synthetic | off
+TRADING_INDICES_INTERVAL=5m
 ```
 
 Swap the model/provider freely — anything speaking OpenAI `chat/completions` works (set `TRADING_LLM_BASE_URL` for a local vLLM/Ollama endpoint).
 
 Add NSE holidays to `market.holidays` (dates as `YYYY-MM-DD`) to keep the agent idle on them; `doctor`/`status` show whether the session is open.
 
+## Indices board (NIFTY, BANKNIFTY, SENSEX)
+
+Read-only intraday screen for the three headline indices. No portfolio, no LLM, no
+journal - it just reads bars (Yahoo) and, optionally, the NSE option chain:
+
+```bash
+# live: Yahoo bars + NSE option chain, refreshed every 60s
+python3 -m trading_agent indices --watch 60
+
+# offline demo: synthetic bars and a synthetic chain (no network at all)
+python3 -m trading_agent indices --source synthetic --option-source synthetic
+
+# just levels/trend, no option chain, machine-readable
+python3 -m trading_agent indices --option-source off --json
+```
+
+For every index it prints:
+
+- **trend** - score (-1..+1) from EMA stack, price vs VWAP, market structure, RSI momentum and slope,
+- **range** - probable low/high (options straddle when available, otherwise the median of recent sessions),
+  with the pivot ladder S3-R3, the central pivot range, the 15-minute opening range and breakout targets,
+- **reversal warnings** - RSI extremes, price/RSI divergence, Bollinger band rides, engulfing candles,
+  long rejection wicks, VWAP loss/stretch, failed opening-range breaks, parabolic runs, CE/PE open-interest
+  walls and max-pain magnet nearby. Summarised as `LOW`/`MEDIUM`/`HIGH` (0-100 score) with a bias,
+- **options** - max pain (where option buyers lose the most), PCR on volume and open interest, the side
+  paying the most premium today, the strikes where positions are being built in bulk, the open-interest
+  support/resistance walls and the ATM straddle breakevens.
+
+Useful flags: `--names "NIFTY BANKNIFTY SENSEX"`, `--interval 5m|15m|1m|1h`,
+`--bars N`, `--source yahoo|csv|synthetic`, `--option-source nse|synthetic|off`,
+`--expiry 27-Oct-2026`, `--json`, `--watch SECONDS`.
+
+Data notes:
+
+- index bars come from Yahoo (`^NSEI`, `^NSEBANK`, `^BSESN`) exactly like the agent's bars,
+- the live option chain uses the NSE API and needs an Indian/browser-reachable connection; the dashboard
+  and CLI degrade to a clear message instead of failing when NSE refuses (HTTP 403),
+- SENSEX options trade on BSE, which exposes no public option-chain API, so a live SENSEX chain is not
+  available - use `--option-source synthetic` (or `off`) for SENSEX while NIFTY/BANKNIFTY stay live,
+  or pass `--option-source synthetic` for a fully offline demo,
+- the same board is available in the web dashboard (`/api/indices`, cached for
+  `indices.refresh_seconds`).
+
 ## Layout
 
 ```
 trading_agent/
-  __main__.py     CLI (run/demo/status/trades/reset/doctor/init)
+  __main__.py     CLI (run/demo/status/trades/reset/doctor/indices/init)
   agent.py        cycle orchestration: data -> exits -> LLM -> risk -> fills
   broker.py       simulated INR ledger + NSE charge model + slippage
   risk.py         position sizing and veto rules
@@ -133,11 +179,13 @@ trading_agent/
   signals.py      indicator snapshot builder
   indicators.py   SMA/EMA/RSI/MACD/ATR/Bollinger (stdlib only)
   data.py         Yahoo / CSV / synthetic bar providers
+  indices.py      intraday index board: trend, range, reversal warnings
+  options.py      NSE / synthetic option chains, max pain, OI walls, bulk strikes
   market_hours.py NSE session + data freshness (IST)
   storage.py      state.json + journal.jsonl persistence
-  report.py       status and trade rendering
+  report.py       status, trade and indices-board rendering
   webui.py        stdlib HTTP server, JSON API and mobile dashboard
-tests/            57 unit and end-to-end tests
+tests/            105 unit and end-to-end tests
 start-website.sh  double-click launcher (Linux/macOS) + stop-website.sh
 start-website.bat double-click launcher (Windows)
 ```

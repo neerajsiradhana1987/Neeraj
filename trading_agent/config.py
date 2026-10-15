@@ -65,6 +65,19 @@ class DataConfig:
 
 
 @dataclass
+class IndicesConfig:
+    """Defaults for the ``indices`` command (trend / range / reversal / options)."""
+
+    names: list = field(default_factory=lambda: ["NIFTY", "BANKNIFTY", "SENSEX"])
+    interval: str = "5m"
+    bars: int = 200
+    option_source: str = "nse"     # nse | synthetic | off
+    ladder_strikes: int = 25       # strikes kept in JSON output around the ATM strike
+    data_source: str = ""          # optional override of data.source for index bars
+    refresh_seconds: int = 60      # minimum age before the dashboard refetches the board
+
+
+@dataclass
 class AgentConfig:
     state_dir: str = "state"
     poll_seconds: int = 300
@@ -73,6 +86,7 @@ class AgentConfig:
     broker: BrokerConfig = field(default_factory=BrokerConfig)
     market: MarketConfig = field(default_factory=MarketConfig)
     data: DataConfig = field(default_factory=DataConfig)
+    indices: IndicesConfig = field(default_factory=IndicesConfig)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -131,6 +145,7 @@ def load_config(path: str = "config.json", dotenv: str = ".env") -> AgentConfig:
         broker=_merge(raw.get("broker", {}), BrokerConfig),
         market=_merge(raw.get("market", {}), MarketConfig),
         data=_merge(raw.get("data", {}), DataConfig),
+        indices=_merge(raw.get("indices", {}), IndicesConfig),
     )
 
     # Environment overrides (secrets and deployment-specific values live here).
@@ -143,6 +158,10 @@ def load_config(path: str = "config.json", dotenv: str = ".env") -> AgentConfig:
         config.llm.model = env["TRADING_LLM_MODEL"].strip()
     if env.get("TRADING_LLM_ENABLED"):
         config.llm.enabled = env["TRADING_LLM_ENABLED"].strip().lower() in ("1", "true", "yes")
+    if env.get("TRADING_INDICES_OPTION_SOURCE"):
+        config.indices.option_source = env["TRADING_INDICES_OPTION_SOURCE"].strip().lower()
+    if env.get("TRADING_INDICES_INTERVAL"):
+        config.indices.interval = env["TRADING_INDICES_INTERVAL"].strip()
     if not config.llm.api_key:
         config.llm.enabled = False
     return config

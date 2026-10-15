@@ -6,14 +6,16 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from datetime import datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from trading_agent.agent import TradingAgent
-from trading_agent.config import AgentConfig, BrokerConfig, MarketConfig, RiskConfig
-from trading_agent.data import SyntheticProvider
+from trading_agent.config import (AgentConfig, BrokerConfig, DataConfig, IndicesConfig,
+                                 MarketConfig, RiskConfig)
+from trading_agent.data import IST, SyntheticProvider
 from trading_agent.llm import MockLLMClient
-from trading_agent.webui import WebController, make_handler, resolve_token
+from trading_agent.webui import HTML_PAGE, WebController, make_handler, resolve_token
 
 
 def _request(url, method="GET", payload=None, headers=None):
@@ -253,7 +255,7 @@ class HaltBehaviourTests(unittest.TestCase):
                     },
                     "realized_pnl": 0.0, "total_charges": 0.0, "total_slippage": 0.0,
                 },
-                "current_day": "2026-10-12",
+                "current_day": datetime.now(IST).date().isoformat(),
                 "day_start_equity": 90000.0,
                 "halted": True,
                 "last_prices": {"RELIANCE.NS": 1000.0},
@@ -272,3 +274,43 @@ class HaltBehaviourTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IndicesApiTests(unittest.TestCase):
+    """The dashboard exposes the same board the CLI prints at /api/indices."""
+
+    def _controller(self, tmp, option_source="synthetic"):
+        config = AgentConfig(
+            state_dir=tmp,
+            broker=BrokerConfig(starting_cash=500000.0, slippage_bps=0.0),
+            market=MarketConfig(symbols=["RELIANCE.NS"], interval="15m", bars=120),
+            risk=RiskConfig(),
+            data=DataConfig(source="synthetic", seed=21),
+            indices=IndicesConfig(names=["NIFTY"], interval="5m", bars=120,
+                                  option_source=option_source, refresh_seconds=0),
+        )
+        agent = TradingAgent(config, provider=SyntheticProvider(seed=21, bars=120),
+                             llm=MockLLMClient())
+        return WebController(config, agent, config_path=os.path.join(tmp, "config.json"))
+
+    def test_indices_endpoint_reports_the_whole_board(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = self._controller(tmp)
+            board = controller.indices()
+            self.assertEqual([entry["index"] for entry in board["indices"]], ["NIFTY"])
+            entry = board["indices"][0]
+            self.assertTrue(entry["options"]["available"])
+            for key in ("trend", "levels", "range", "reversal", "options"):
+                self.assertIn(key, entry)
+            self.assertIn("max_pain", entry["options"])
+
+    def test_option_chain_off_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = self._controller(tmp, option_source="off")
+            board = controller.indices()
+            self.assertFalse(board["indices"][0]["options"]["available"])
+            self.assertIsNone(board["chain_source"])
+
+    def test_page_links_the_new_api(self):
+        self.assertIn("/api/indices", HTML_PAGE)
+        self.assertIn("renderIndices", HTML_PAGE)

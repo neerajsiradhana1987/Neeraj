@@ -26,10 +26,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .agent import TradingAgent
+from .agent import TradingAgent, build_provider
 from .config import AgentConfig, load_config
 from .data import INTERVAL_SECONDS
+from .indices import build_index_board, resolve_indices, synthetic_chain_provider
 from .market_hours import is_market_open, next_session_open, now_ist
+from .options import build_chain_provider
 from .storage import StateStore
 
 INTERVALS = ["1m", "5m", "15m", "1h", "1d"]
@@ -52,6 +54,53 @@ class WebController:
         self.last_report = None
         self.last_run_ts = None
         self.last_error = None
+        self._bar_provider = None
+        self._chain_provider = None
+        self._indices_cache = None
+
+    # ----------------------------------------------------------------- indices
+    def _index_providers(self):
+        """Lazily build (and remember) the providers used by the indices board."""
+        if self._bar_provider is None:
+            data_config = self.config.data
+            data_config.source = self.config.indices.data_source or data_config.source
+            self._bar_provider = build_provider(self.config)
+        if self._chain_provider is None:
+            self._chain_provider = self._build_chain_provider()
+        return self._bar_provider, self._chain_provider
+
+    def _build_chain_provider(self):
+        source = (self.config.indices.option_source or "nse").lower()
+        if source in ("off", "none", "disabled"):
+            return None
+        if source == "synthetic":
+            return synthetic_chain_provider(
+                self._bar_provider, self.config.indices.interval, self.config.indices.bars)
+        return build_chain_provider(source)
+
+    def indices(self) -> dict:
+        """Indices board, refreshed at most once every ``indices.refresh_seconds``."""
+        interval = self.config.indices.interval
+        bars = self.config.indices.bars
+        now = time.time()
+        cached = self._indices_cache
+        if cached and now - cached[0] < self.config.indices.refresh_seconds:
+            return cached[1]
+        with self._lock:
+            cached = self._indices_cache
+            if cached and now - cached[0] < self.config.indices.refresh_seconds:
+                return cached[1]
+            bar_provider, chain_provider = self._index_providers()
+            board = build_index_board(
+                specs=resolve_indices(",".join(self.config.indices.names)),
+                provider=bar_provider,
+                chain_provider=chain_provider,
+                interval=interval,
+                bars=bars,
+                ladder_strikes=self.config.indices.ladder_strikes,
+            )
+            self._indices_cache = (now, board)
+            return board
 
     # ------------------------------------------------------------------ running
     @property
@@ -334,6 +383,22 @@ height:fit-content;margin-top:1px}
 .banner{background:rgba(210,153,34,.12);border:1px solid rgba(210,153,34,.35);color:#e8c36a;
 border-radius:10px;padding:9px 11px;font-size:13px;margin-bottom:12px}
 .hidden{display:none!important}
+.tag.INFO{background:rgba(63,185,80,.16);color:var(--green)}
+.tag.WATCH{background:rgba(210,153,34,.16);color:var(--amber)}
+.tag.ALERT{background:rgba(248,81,73,.16);color:var(--red)}
+.idx{background:var(--card2);border:1px solid var(--line);border-radius:12px;
+  padding:12px;margin-bottom:10px}
+.idx:last-child{margin-bottom:0}
+.idx .head{display:flex;align-items:baseline;gap:8px}
+.idx .name{font-weight:650}
+.idx .lv{margin-left:auto;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.4px}
+.idx .lv.low{color:var(--green)}.idx .lv.medium{color:var(--amber)}.idx .lv.high{color:var(--red)}
+.idx .row{display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:13px}
+.idx .k{color:var(--muted)}
+.idx .warn{display:flex;gap:6px;margin-top:6px;font-size:12px;align-items:flex-start}
+.idx .opt{margin-top:8px;border-top:1px dashed var(--line);padding-top:8px;font-size:12px;
+  color:var(--muted)}
+.idx .opt b{color:var(--text);font-weight:600}
 .login{position:fixed;inset:0;background:rgba(11,15,20,.96);display:flex;align-items:center;
 justify-content:center;padding:24px;z-index:20}
 .login .box{width:100%;max-width:320px}
@@ -353,6 +418,11 @@ justify-content:center;padding:24px;z-index:20}
   <section class="panel">
     <div class="panel-head"><h2>Positions</h2><span class="muted" id="posmeta"></span></div>
     <div id="positions"><p class="note">loading...</p></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Indices</h2><span class="muted" id="idxmeta"></span></div>
+    <div id="indices"><p class="note">loading...</p></div>
   </section>
 
   <section class="panel">
@@ -525,8 +595,77 @@ function renderStatus(s) {
     : (s.last_error ? "error: " + s.last_error : "no cycles run yet in this session");
 }
 
-function renderFeed(events) {
-  const list = document.getElementById("activity");
+const IDX_TREND = {strong_up: "^^ strong UP", up: "^ UP", sideways: "-> sideways",
+  down: "v DOWN", strong_down: "vv strong DOWN"};
+
+function idxLevels(levels, key, count) {
+  const rows = (levels && levels[key]) || [];
+  if (!rows.length) return "-";
+  return rows.slice(0, count || 2)
+    .map((l) => fmt(l.price, 1) + " " + String(l.label || "").replace(/_/g, " ")).join(", ");
+}
+
+function renderIndices(board) {
+  const wrap = document.getElementById("indices");
+  const meta = document.getElementById("idxmeta");
+  const rows = (board && board.indices) || [];
+  meta.textContent = (board ? (board.market_open ? "market open" : "market closed") + " - "
+    + board.interval : "");
+  if (!rows.length) { wrap.innerHTML = '<p class="note">No index data.</p>'; return; }
+  wrap.innerHTML = rows.map((r) => {
+    if (r.error) {
+      return '<div class="idx"><div class="head"><span class="name">' + esc(r.index)
+        + '</span></div><div class="row"><span class="k">error</span><span>'
+        + esc(r.error) + "</span></div></div>";
+    }
+    const chg = signed(r.change, 2) + " (" + signed(r.change_pct, 2) + "%)";
+    const rev = r.reversal || {};
+    const warnings = (rev.warnings || []).slice(0, 4).map((w) =>
+      '<div class="warn"><span class="tag ' + esc(String(w.severity).toUpperCase())
+      + '">' + esc(String(w.severity)) + "</span><span>" + esc(w.message) + "</span></div>").join("");
+    let opt = '<div class="opt">option chain unavailable - '
+      + esc((r.options && r.options.reason) || "no data") + "</div>";
+    const o = r.options || {};
+    if (o.available) {
+      const pain = o.max_pain || {};
+      const pressure = o.buying_pressure || {};
+      const bulk = o.bulk_strikes || {};
+      opt = '<div class="opt">'
+        + "expiry " + esc(o.expiry) + " | ATM <b>" + fmt(o.atm_strike, 0) + "</b> | max pain <b>"
+        + fmt(pain.strike, 0) + "</b> (" + fmt(pain.distance_pct, 2) + "%)"
+        + " | PCR <b>" + fmt((o.pcr || {}).oi_pcr, 2) + "</b> "
+        + esc((o.pcr || {}).bias || "") + "<br>"
+        + "max buying side <b>" + esc(pressure.max_buying_side || "-") + "</b> ("
+        + fmt(pressure.max_buying_pct, 1) + "% of premium) - " + esc(pressure.flow || "")
+        + "<br>bulk PE " + esc((bulk.PE || []).map((b) => fmt(b.strike, 0)).join(", ") || "-")
+        + " | CE " + esc((bulk.CE || []).map((b) => fmt(b.strike, 0)).join(", ") || "-")
+        + "<br>CE resistance "
+        + esc(((o.walls || {}).call_resistance || []).map((b) => fmt(b.strike, 0)).join(", ") || "-")
+        + " | PE support "
+        + esc(((o.walls || {}).put_support || []).map((b) => fmt(b.strike, 0)).join(", ") || "-")
+        + "</div>";
+    }
+    return '<div class="idx"><div class="head"><span class="name">' + esc(r.name) + "</span>"
+      + "<span>" + fmt(r.spot, 2) + "</span>"
+      + '<span class="' + (r.change >= 0 ? "pos" : "neg") + '">' + esc(chg) + "</span>"
+      + '<span class="lv ' + esc(rev.risk || "low") + '">' + esc(String(rev.risk || "").toUpperCase())
+      + "</span></div>"
+      + '<div class="row"><span class="k">trend</span><span>'
+      + esc((IDX_TREND[r.trend.label] || r.trend.label)
+        + " (" + fmt(r.trend.score, 2) + ")") + "</span></div>"
+      + '<div class="row"><span class="k">range</span><span>' + fmt(r.range.low, 1) + " - "
+      + fmt(r.range.high, 1) + " (" + fmt(r.range.width_pct, 2) + "%)</span></div>"
+      + '<div class="row"><span class="k">resistance</span><span>'
+      + esc(idxLevels(r.levels, "resistance")) + "</span></div>"
+      + '<div class="row"><span class="k">support</span><span>'
+      + esc(idxLevels(r.levels, "support")) + "</span></div>"
+      + '<div class="row"><span class="k">reversal</span><span>'
+      + fmt(rev.score, 0) + "/100" + (rev.bias && rev.bias !== "none" ? " - " + esc(rev.bias) : "")
+      + "</span></div>" + warnings + opt + "</div>";
+  }).join("");
+}
+
+function renderFeed(events) {  const list = document.getElementById("activity");
   document.getElementById("feedmeta").textContent = events.length + " events";
   list.innerHTML = events.map((e) => {
     const detail = e.event === "DECISION"
@@ -544,9 +683,9 @@ function renderFeed(events) {
 
 async function refresh() {
   try {
-    const [status, events] = await Promise.all([
-      api("/api/status"), api("/api/journal?limit=20")]);
-    renderStatus(status); renderFeed(events);
+    const [status, events, board] = await Promise.all([
+      api("/api/status"), api("/api/journal?limit=20"), api("/api/indices")]);
+    renderStatus(status); renderFeed(events); renderIndices(board);
   } catch (e) { /* login screen or transient error */ }
 }
 
@@ -662,6 +801,8 @@ def make_handler(controller: WebController, token: str = None):
                 if route == "/api/trades":
                     limit = min(int(query.get("limit", ["20"])[0] or 20), 200)
                     return self._send_json(controller.trades(limit=limit))
+                if route == "/api/indices":
+                    return self._send_json(controller.indices())
                 return self._send_json({"error": f"unknown route {route}"}, status=404)
             except Exception as exc:
                 return self._send_json({"error": f"{type(exc).__name__}: {exc}"}, status=500)

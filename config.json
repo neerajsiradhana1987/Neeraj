@@ -42,5 +42,14 @@
     "source": "yahoo",
     "csv_directory": "data",
     "seed": 1234
+  },
+  "indices": {
+    "names": ["NIFTY", "BANKNIFTY", "SENSEX"],
+    "interval": "5m",
+    "bars": 200,
+    "option_source": "nse",
+    "ladder_strikes": 25,
+    "data_source": "",
+    "refresh_seconds": 60
   }
 }
